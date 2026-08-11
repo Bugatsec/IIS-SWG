@@ -1,1 +1,1 @@
-# IIS-Shortname-Wordlist-Generator-Github-Assetnote-
+# IIS-Shortname-Wordlist-Generator
