@@ -4,7 +4,7 @@ IIS-SWG - IIS Shortname Wordlist Generator
 Search GitHub code paths and extract matching path segments.
 
 Author : @Bugatsec
-GitHub : https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator
+GitHub : https://github.com/Bugatsec/IIS-SWG
 """
 
 import argparse
@@ -20,6 +20,7 @@ from selenium import webdriver
 from selenium.common.exceptions import (
     StaleElementReferenceException,
     TimeoutException,
+    WebDriverException,
 )
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -281,6 +282,20 @@ def select_chrome_profile(interactive=True):
     Returns (user_data_dir, profile_directory, is_dedicated)
     """
 
+    # --------------------------------------------------
+    # Already set up before? Just use it - don't ask
+    # every single run.
+    # --------------------------------------------------
+
+    if os.path.isdir(DEDICATED_PROFILE_DIR):
+
+        print(
+            f"{Color.CYAN}[*] Using existing dedicated 'iis-swg' "
+            f"profile.{Color.RESET}"
+        )
+
+        return DEDICATED_PROFILE_DIR, "Default", True
+
     detected = []
 
     for browser_name, root in get_chrome_data_roots():
@@ -375,6 +390,139 @@ def select_chrome_profile(interactive=True):
     return chosen_root, chosen_dir, False
 
 
+def build_chrome_options(
+    user_data_dir,
+    profile_directory,
+    browser_binary,
+    headless=True
+):
+    """
+    Build a Chrome/Chromium Options object bound to a
+    specific profile, optionally headless.
+    """
+
+    chrome_options = Options()
+
+    if browser_binary:
+        chrome_options.binary_location = browser_binary
+
+    if headless:
+        chrome_options.add_argument("--headless=new")
+
+    # Sandbox/GPU flags: required on Linux/WSL, harmless on Windows
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+
+    # Reduce output
+    chrome_options.add_argument("--log-level=3")
+
+    chrome_options.add_argument(
+        f"--user-data-dir={user_data_dir}"
+    )
+
+    chrome_options.add_argument(
+        f"--profile-directory={profile_directory}"
+    )
+
+    return chrome_options
+
+
+def interactive_github_login(
+    user_data_dir,
+    profile_directory,
+    browser_binary,
+    timeout=900
+):
+    """
+    Open a *visible* browser window bound to the given
+    profile so the user can log in to GitHub, then close
+    the window automatically once a logged-in session is
+    detected. Returns True if login was confirmed, False
+    otherwise (timeout, or the user closed the window
+    themselves before finishing).
+    """
+
+    print()
+    print(
+        f"{Color.CYAN}[*] Opening a browser window so you can log in "
+        f"to GitHub...{Color.RESET}"
+    )
+    print(
+        f"{Color.YELLOW}[!] Log in to your GitHub account (or create a "
+        f"free one) in the window that opens.{Color.RESET}"
+    )
+    print(
+        f"{Color.YELLOW}[!] The window will close on its own once "
+        f"you're logged in - you don't need to close it "
+        f"yourself.{Color.RESET}"
+    )
+    print()
+
+    chrome_options = build_chrome_options(
+        user_data_dir,
+        profile_directory,
+        browser_binary,
+        headless=False
+    )
+
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.set_page_load_timeout(30)
+
+    logged_in = False
+
+    try:
+
+        driver.get("https://github.com/login")
+
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+
+            time.sleep(2)
+
+            try:
+
+                cookie = driver.get_cookie("logged_in")
+
+                if cookie and cookie.get("value") == "yes":
+                    logged_in = True
+                    break
+
+            except WebDriverException:
+
+                # The window/browser was closed before we
+                # could confirm login.
+                print(
+                    f"{Color.RED}[!] Browser window was closed before "
+                    f"login was detected.{Color.RESET}"
+                )
+
+                return False
+
+        if logged_in:
+
+            print(
+                f"{Color.GREEN}[*] Logged in! Closing the browser "
+                f"window...{Color.RESET}"
+            )
+
+        else:
+
+            print(
+                f"{Color.RED}[!] Timed out waiting for login.{Color.RESET}"
+            )
+
+    finally:
+
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    return logged_in
+
+
 def create_driver(interactive=True):
 
     # --------------------------------------------------
@@ -398,94 +546,56 @@ def create_driver(interactive=True):
         interactive=interactive
     )
 
-    if is_dedicated and not os.path.isdir(user_data_dir):
+    first_run = is_dedicated and not os.path.isdir(user_data_dir)
+
+    if first_run:
 
         # --------------------------------------------------
-        # First-time dedicated profile: set it up and stop
-        # here instead of running a search that will fail.
+        # First-time dedicated profile: create it and log
+        # in right now ourselves, instead of asking the user
+        # to go run a command in a separate terminal.
         # --------------------------------------------------
 
         os.makedirs(user_data_dir, exist_ok=True)
 
-        launcher = browser_binary if browser_binary else (
-            "chrome.exe" if platform.system() == "Windows" else "chromium"
-        )
-
-        login_cmd = (
-            f"\"{launcher}\" "
-            f"--user-data-dir=\"{user_data_dir}\" "
-            f"--profile-directory=Default"
-        )
-
-        print()
         print(
             f"{Color.YELLOW}[!] No existing 'iis-swg' profile found. "
             f"Created a new one at:{Color.RESET}"
         )
         print(f"    {user_data_dir}")
-        print()
-        print(
-            f"{Color.CYAN}[*] One-time setup needed before this tool can "
-            f"search GitHub:{Color.RESET}"
-        )
-        print(
-            f"  1) Open a new terminal window."
-        )
-        print(
-            f"  2) Paste and run this command:"
-        )
-        print()
-        print(f"    {Color.GREEN}{login_cmd}{Color.RESET}")
-        print()
-        print(
-            f"  3) A Chromium/Chrome window will open. Log in to GitHub "
-            f"(or create a free account)."
-        )
-        print(
-            f"  4) Close that window."
-        )
-        print(
-            f"  5) Come back here and re-run this tool - it will reuse "
-            f"that login automatically."
-        )
-        print()
 
-        raise SystemExit(0)
+        logged_in = interactive_github_login(
+            user_data_dir,
+            profile_directory,
+            browser_binary
+        )
 
-    if is_dedicated:
+        if not logged_in:
+
+            print(
+                f"{Color.RED}[!] Could not confirm GitHub login. Re-run "
+                f"the tool to try again.{Color.RESET}"
+            )
+
+            raise SystemExit(1)
+
+    elif is_dedicated:
 
         print(
-            f"{Color.CYAN}[*] Using existing dedicated profile: "
+            f"{Color.CYAN}[*] Using dedicated 'iis-swg' profile: "
             f"{user_data_dir}{Color.RESET}"
         )
 
-    chrome_options = Options()
-
-    if browser_binary:
-        chrome_options.binary_location = browser_binary
-
-    # Headless
-    chrome_options.add_argument("--headless=new")
-
-    # Sandbox/GPU flags: required on Linux/WSL, harmless on Windows
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-
-    # Reduce output
-    chrome_options.add_argument("--log-level=3")
-
-    chrome_options.add_argument(
-        f"--user-data-dir={user_data_dir}"
-    )
-
-    chrome_options.add_argument(
-        f"--profile-directory={profile_directory}"
-    )
-
     # --------------------------------------------------
-    # Start browser
+    # Start browser (headless)
     # --------------------------------------------------
+
+    chrome_options = build_chrome_options(
+        user_data_dir,
+        profile_directory,
+        browser_binary,
+        headless=True
+    )
 
     driver = webdriver.Chrome(
         options=chrome_options
@@ -493,7 +603,7 @@ def create_driver(interactive=True):
 
     driver.set_page_load_timeout(30)
 
-    return driver
+    return driver, user_data_dir, profile_directory, is_dedicated, browser_binary
 
 
 # --------------------------------------------------
@@ -613,7 +723,11 @@ def search_github(query, interactive=True):
         "&p="
     )
 
-    driver = create_driver(interactive=interactive)
+    driver, user_data_dir, profile_directory, is_dedicated, browser_binary = (
+        create_driver(interactive=interactive)
+    )
+
+    relogin_attempted = False
 
     try:
 
@@ -661,6 +775,46 @@ def search_github(query, interactive=True):
                     "Sign in to search code on GitHub"
                     in page_text
                 ):
+
+                    if is_dedicated and not relogin_attempted:
+
+                        relogin_attempted = True
+
+                        print()
+                        print(
+                            f"{Color.YELLOW}[!] Not logged in to GitHub "
+                            f"yet.{Color.RESET}"
+                        )
+
+                        driver.quit()
+
+                        logged_in = interactive_github_login(
+                            user_data_dir,
+                            profile_directory,
+                            browser_binary
+                        )
+
+                        if not logged_in:
+
+                            print(
+                                f"{Color.RED}[!] Could not confirm "
+                                f"GitHub login.{Color.RESET}"
+                            )
+
+                            break
+
+                        chrome_options = build_chrome_options(
+                            user_data_dir,
+                            profile_directory,
+                            browser_binary,
+                            headless=True
+                        )
+
+                        driver = webdriver.Chrome(options=chrome_options)
+                        driver.set_page_load_timeout(30)
+
+                        # Retry the same page now that we're logged in.
+                        continue
 
                     print()
                     print(
