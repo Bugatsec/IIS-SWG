@@ -3,13 +3,16 @@ IIS-SWG - IIS Shortname Wordlist Generator
 
 Search GitHub code paths and extract matching path segments.
 
-Author : @Bugatsec (Ranveer Kohli)
+Author : @Bugatsec
 GitHub : https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator
 """
 
 import argparse
+import json
 import logging
 import os
+import platform
+import shutil
 import time
 from urllib.parse import quote_plus
 
@@ -67,17 +70,336 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # Browser
 # --------------------------------------------------
 
-def create_driver():
+def find_browser_binary():
+    """
+    Locate an installed Chrome/Chromium binary across
+    Windows, Linux/WSL, and macOS.
+
+    Returns the full path if found, or None to let
+    Selenium's own auto-detection (Selenium Manager)
+    try instead.
+    """
+
+    system = platform.system()
+    candidates = []
+
+    if system == "Windows":
+
+        candidates = [
+            os.path.expandvars(
+                r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+            ),
+            os.path.expandvars(
+                r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+            ),
+            os.path.expandvars(
+                r"%LocalAppData%\Google\Chrome\Application\chrome.exe"
+            ),
+            os.path.expandvars(
+                r"%ProgramFiles%\Chromium\Application\chrome.exe"
+            ),
+        ]
+
+    elif system == "Darwin":
+
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+
+    else:
+
+        # Linux / WSL
+        for name in (
+            "chromium",
+            "chromium-browser",
+            "google-chrome",
+            "google-chrome-stable",
+        ):
+
+            found = shutil.which(name)
+
+            if found:
+                candidates.append(found)
+
+        candidates += [
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+        ]
+
+    for path in candidates:
+
+        if path and os.path.isfile(path):
+            return path
+
+    return None
+
+
+# --------------------------------------------------
+# Profile detection
+# --------------------------------------------------
+
+DEDICATED_PROFILE_DIR = os.path.expanduser(
+    "~/.config/gsnw-chromium"
+)
+
+
+def get_chrome_data_roots():
+    """
+    Return (browser_name, user_data_dir) candidates for
+    the user's own, real Chrome/Chromium installs, per OS.
+    """
+
+    system = platform.system()
+    roots = []
+
+    if system == "Windows":
+
+        roots.append((
+            "Chrome",
+            os.path.expandvars(
+                r"%LocalAppData%\Google\Chrome\User Data"
+            )
+        ))
+
+        roots.append((
+            "Chromium",
+            os.path.expandvars(
+                r"%LocalAppData%\Chromium\User Data"
+            )
+        ))
+
+    elif system == "Darwin":
+
+        home = os.path.expanduser("~")
+
+        roots.append((
+            "Chrome",
+            os.path.join(
+                home,
+                "Library/Application Support/Google/Chrome"
+            )
+        ))
+
+        roots.append((
+            "Chromium",
+            os.path.join(
+                home,
+                "Library/Application Support/Chromium"
+            )
+        ))
+
+    else:
+
+        home = os.path.expanduser("~")
+
+        roots.append((
+            "Chrome",
+            os.path.join(home, ".config/google-chrome")
+        ))
+
+        roots.append((
+            "Chromium",
+            os.path.join(home, ".config/chromium")
+        ))
+
+    return roots
+
+
+def list_profiles_in_root(root_path):
+    """
+    Return [(profile_dir_name, display_label), ...] for a
+    given Chrome/Chromium user-data-dir, reading each
+    profile's Preferences file for a friendlier label.
+    """
+
+    profiles = []
+
+    if not os.path.isdir(root_path):
+        return profiles
+
+    for entry in sorted(os.listdir(root_path)):
+
+        if entry != "Default" and not entry.startswith("Profile "):
+            continue
+
+        profile_path = os.path.join(root_path, entry)
+
+        if not os.path.isdir(profile_path):
+            continue
+
+        label = entry
+        prefs_path = os.path.join(profile_path, "Preferences")
+
+        if os.path.isfile(prefs_path):
+
+            try:
+
+                with open(prefs_path, "r", encoding="utf-8") as f:
+                    prefs = json.load(f)
+
+                name = prefs.get("profile", {}).get("name")
+
+                accounts = prefs.get("account_info", [])
+                email = accounts[0].get("email") if accounts else None
+
+                if name and email:
+                    label = f"{entry} - {name} ({email})"
+                elif name:
+                    label = f"{entry} - {name}"
+                elif email:
+                    label = f"{entry} - {email}"
+
+            except Exception:
+                pass
+
+        profiles.append((entry, label))
+
+    return profiles
+
+
+def is_profile_locked(user_data_dir):
+    """
+    Best-effort check for whether a profile is currently
+    open in a running browser (Chrome/Chromium create a
+    SingletonLock symlink while running, on Linux/macOS).
+    Not fully reliable on Windows, so treated as advisory.
+    """
+
+    lock_path = os.path.join(user_data_dir, "SingletonLock")
+    return os.path.islink(lock_path) or os.path.exists(lock_path)
+
+
+def select_chrome_profile(interactive=True):
+    """
+    Detect the user's own Chrome/Chromium profiles and let
+    them choose to use one directly, or fall back to a
+    separate dedicated profile just for this tool.
+
+    Returns (user_data_dir, profile_directory, is_dedicated)
+    """
+
+    detected = []
+
+    for browser_name, root in get_chrome_data_roots():
+
+        for dir_name, label in list_profiles_in_root(root):
+
+            detected.append((
+                root,
+                dir_name,
+                f"{browser_name} - {label}"
+            ))
+
+    dedicated_label = (
+        "Use a separate dedicated profile just for this "
+        "tool (recommended, won't touch your main browser)"
+    )
+
+    # Nothing detected, or non-interactive run: go straight
+    # to the dedicated profile, no prompt.
+    if not detected or not interactive:
+
+        if detected:
+
+            print(
+                f"{Color.CYAN}[*] Existing browser profiles found, but "
+                f"running non-interactively - using the dedicated "
+                f"profile.{Color.RESET}"
+            )
+
+        return DEDICATED_PROFILE_DIR, "Default", True
+
+    print(
+        f"{Color.CYAN}[*] Found existing browser profile(s) on this "
+        f"machine:{Color.RESET}"
+    )
+
+    print()
+
+    for i, (root, dir_name, label) in enumerate(detected, 1):
+        print(f"  {i}) {label}")
+
+    dedicated_choice_num = len(detected) + 1
+
+    print(f"  {dedicated_choice_num}) {dedicated_label}")
+    print()
+
+    try:
+
+        choice = input(
+            f"Select a profile to use "
+            f"[1-{dedicated_choice_num}] "
+            f"(default {dedicated_choice_num}): "
+        ).strip()
+
+    except (EOFError, KeyboardInterrupt):
+
+        choice = ""
+
+    try:
+
+        idx = int(choice) if choice else dedicated_choice_num
+
+    except ValueError:
+
+        idx = dedicated_choice_num
+
+    if idx == dedicated_choice_num or idx < 1 or idx > dedicated_choice_num:
+        return DEDICATED_PROFILE_DIR, "Default", True
+
+    chosen_root, chosen_dir, chosen_label = detected[idx - 1]
+
+    if is_profile_locked(chosen_root):
+
+        print()
+        print(
+            f"{Color.RED}[!] '{chosen_label}' looks like it's currently "
+            f"open in a browser window.{Color.RESET}"
+        )
+
+        print(
+            f"{Color.RED}[!] Close that browser first if you want to "
+            f"reuse it, or this run will fall back to the dedicated "
+            f"profile now.{Color.RESET}"
+        )
+
+        return DEDICATED_PROFILE_DIR, "Default", True
+
+    print(
+        f"{Color.GREEN}[*] Using your profile: {chosen_label}{Color.RESET}"
+    )
+
+    return chosen_root, chosen_dir, False
+
+
+def create_driver(interactive=True):
 
     chrome_options = Options()
 
-    # Kali WSL Chromium
-    chrome_options.binary_location = "/usr/bin/chromium"
+    # --------------------------------------------------
+    # Locate Chrome/Chromium for this OS
+    # --------------------------------------------------
+
+    browser_binary = find_browser_binary()
+
+    if browser_binary:
+
+        chrome_options.binary_location = browser_binary
+
+    else:
+
+        print(
+            f"{Color.YELLOW}[!] Could not auto-detect a Chrome/Chromium "
+            f"install. Letting Selenium try to locate it.{Color.RESET}"
+        )
 
     # Headless
     chrome_options.add_argument("--headless=new")
 
-    # WSL-friendly
+    # Sandbox/GPU flags: required on Linux/WSL, harmless on Windows
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -86,19 +408,55 @@ def create_driver():
     chrome_options.add_argument("--log-level=3")
 
     # --------------------------------------------------
-    # Dedicated GSNW Chromium profile
+    # Pick a profile: user's own, or a dedicated one
     # --------------------------------------------------
 
-    chromium_profile = os.path.expanduser(
-        "~/.config/gsnw-chromium"
+    user_data_dir, profile_directory, is_dedicated = select_chrome_profile(
+        interactive=interactive
+    )
+
+    if is_dedicated:
+
+        profile_already_existed = os.path.isdir(user_data_dir)
+
+        if profile_already_existed:
+
+            print(
+                f"{Color.CYAN}[*] Using existing dedicated profile: "
+                f"{user_data_dir}{Color.RESET}"
+            )
+
+        else:
+
+            os.makedirs(user_data_dir, exist_ok=True)
+
+            print(
+                f"{Color.YELLOW}[!] No existing dedicated profile found. "
+                f"Created a new one at:{Color.RESET}"
+            )
+
+            print(f"    {user_data_dir}")
+
+            print(
+                f"{Color.YELLOW}[!] This profile isn't logged in to "
+                f"GitHub yet. Log in once by running:{Color.RESET}"
+            )
+
+            print(
+                f"    chromium --user-data-dir=\"{user_data_dir}\""
+            )
+
+            print(
+                f"{Color.YELLOW}[!] Log in to GitHub in that window, "
+                f"then close it and re-run this tool.{Color.RESET}"
+            )
+
+    chrome_options.add_argument(
+        f"--user-data-dir={user_data_dir}"
     )
 
     chrome_options.add_argument(
-        f"--user-data-dir={chromium_profile}"
-    )
-
-    chrome_options.add_argument(
-        "--profile-directory=Default"
+        f"--profile-directory={profile_directory}"
     )
 
     # --------------------------------------------------
@@ -215,7 +573,7 @@ def extract_matches(driver, query, matched_words):
 # Search GitHub
 # --------------------------------------------------
 
-def search_github(query):
+def search_github(query, interactive=True):
 
     matched_words = set()
     page_number = 1
@@ -231,7 +589,7 @@ def search_github(query):
         "&p="
     )
 
-    driver = create_driver()
+    driver = create_driver(interactive=interactive)
 
     try:
 
@@ -528,13 +886,23 @@ def main():
         help="Suppress banner"
     )
 
+    parser.add_argument(
+        "-dedicated-profile",
+        action="store_true",
+        help=(
+            "Skip the profile picker and always use the tool's own "
+            "dedicated Chromium profile (no prompt, good for scripting)"
+        )
+    )
+
     args = parser.parse_args()
 
     if not args.silent:
         print(BANNER)
 
     matched_words = search_github(
-        args.search_query
+        args.search_query,
+        interactive=not args.dedicated_profile
     )
 
     # --------------------------------------------------
