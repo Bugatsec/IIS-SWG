@@ -4,7 +4,7 @@ IIS-SWG - IIS Shortname Wordlist Generator
 Search GitHub code paths and extract matching path segments.
 
 Author : @Bugatsec
-GitHub : https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator
+GitHub : https://github.com/Bugatsec/IIS-SWG
 """
 
 import argparse
