@@ -1,104 +1,138 @@
 # IIS-SWG — IIS Shortname Wordlist Generator
 
-<p align="left">
-  <img src="https://img.shields.io/badge/python-3.x-blue?logo=python&logoColor=white" alt="Python 3.x">
-  <img src="https://img.shields.io/badge/built%20with-Selenium-43B02A?logo=selenium&logoColor=white" alt="Built with Selenium">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20WSL%20-informational" alt="Platform">
-  <img src="https://img.shields.io/github/stars/Bugatsec/IIS-Shortname-Wordlist-Generator?style=social" alt="Stars">
-  <img src="https://img.shields.io/github/forks/Bugatsec/IIS-Shortname-Wordlist-Generator?style=social" alt="Forks">
-  <img src="https://img.shields.io/github/issues/Bugatsec/IIS-Shortname-Wordlist-Generator" alt="Issues">
-  <img src="https://img.shields.io/github/last-commit/Bugatsec/IIS-Shortname-Wordlist-Generator" alt="Last commit">
-</p>
+![Python](https://img.shields.io/badge/python-3.x-blue?logo=python&logoColor=white)
+![Selenium](https://img.shields.io/badge/selenium-4.15%2B-43B02A?logo=selenium&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL%20%7C%20Windows-lightgrey)
+![Status](https://img.shields.io/badge/status-active-success)
+![Stars](https://img.shields.io/github/stars/Bugatsec/IIS-SWG?style=social)
+![Issues](https://img.shields.io/github/issues/Bugatsec/IIS-SWG)
+![Last Commit](https://img.shields.io/github/last-commit/Bugatsec/IIS-SWG)
 
-Automates the process of fetching potential file and directory names based on the partial 8.3 short names leaked by an IIS Tilde (`~`) shortname enumeration scan. It drives a headless Chromium instance via Selenium to search GitHub code for path segments matching those partial names, so you can turn short, truncated hints into a usable wordlist.
+Automates fetching potential file and directory names based on the partial
+names recovered by an IIS Tilde (`~`) shortname scanner. It drives a headless
+Chrome/Chromium browser via Selenium to run GitHub code searches for a given
+short-name fragment and collects matching path segments into a wordlist.
 
 ## Credits
 
-This tool is based on the original **[gsnw](https://github.com/retkoussa/gsnw)** by [retkoussa](https://github.com/retkoussa) ([@retkoussa on X](https://twitter.com/retkoussa)). All core logic and the original idea belong to them.
-
-This repository is **not a fork** — it's a standalone rewrite adapted specifically for running under **WSL Kali with Chromium**, since the original script targeted Windows + Google Chrome and did not work as-is in a WSL environment. Output formatting, banner, and Linux/WSL setup were changed; the search and extraction logic is unchanged from the original.
+This tool is based on the original **[gsnw](https://github.com/retkoussa/gsnw)**
+by [@retkoussa](https://github.com/retkoussa). The original script targeted a
+Windows + Chrome setup. This repository is an independent rewrite (not a fork)
+adapted for a Linux / WSL (Kali) + Chromium workflow, with output formatting
+and setup changes for that environment. All credit for the original concept
+and implementation goes to the original author.
 
 ## Features
 
-- Headless Chromium automation via Selenium (Selenium Manager auto-resolves the matching driver — no manual chromedriver install needed)
-- Uses a dedicated, persistent Chromium profile so you stay logged in to GitHub between runs
-- Extracts and deduplicates matching path segments from GitHub code search results across all result pages
-- Optional silent mode to suppress the banner
-- Optional output file to save results as a plain wordlist
+- Headless, Selenium-driven GitHub code search by path fragment
+- Uses a dedicated, persistent Chromium profile so you only log in to GitHub once
+- Paginates through search results automatically
+- Deduplicates matched path segments across pages
+- Colored console output for readability
+- Silent mode to suppress the banner (`-silent`)
+- Optional save-to-file output
 
 ## Requirements
 
 - Python 3.x
-- Chromium (not Google Chrome — this build targets the `chromium` binary at `/usr/bin/chromium`)
-- WSL Kali (or another Linux environment with Chromium installed)
-- A GitHub account (GitHub code search requires you to be signed in)
+- Google Chrome or Chromium installed
+- `selenium` (see `requirements.txt`)
 
 ## Installation
 
 ```bash
-git clone https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator.git
-cd IIS-Shortname-Wordlist-Generator
+git clone https://github.com/Bugatsec/IIS-SWG.git
+cd IIS-SWG
 
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate      # Windows: .venv\Scripts\Activate
 
 pip install -r requirements.txt
 ```
 
-Make sure Chromium is installed on your WSL Kali system:
+## ⚠️ Chromium/Chrome Profile Setup (read this first)
 
-```bash
-sudo apt update
-sudo apt install chromium -y
+At startup, the tool scans your machine for existing Chrome/Chromium
+profiles (on Windows, Linux/WSL, and macOS) and shows you a picker:
+
+```
+[*] Found existing browser profile(s) on this machine:
+
+  1) Chrome - Default - Ranveer (ranveer@example.com)
+  2) Chrome - Profile 1 - Work
+  3) Use a separate dedicated profile just for this tool (recommended, won't touch your main browser)
+
+Select a profile to use [1-3] (default 3):
 ```
 
-## First-Time Setup — Logging in to GitHub (Important)
+- **Pick your own profile** if you're already logged in to GitHub there.
+  You'll need to close that browser window first — a profile that's
+  currently open and locked can't be reused by the tool, and it'll
+  automatically fall back to the dedicated profile if it detects that.
+  Note: even when closed, headless automation sometimes fails to reuse a
+  real profile's login session (Chrome/GitHub can treat an automated
+  session differently from a normal one) — if you hit an auth wall here,
+  switch to the dedicated profile below.
+- **Pick the dedicated option (default)** to leave your main browser
+  completely untouched. The tool creates and reuses its own separate
+  profile named `iis-swg` at:
+  ```
+  ~/.config/iis-swg
+  ```
+  The first time this profile is created, the tool stops and prints a
+  ready-to-paste command instead of trying (and failing) to search. It
+  looks like this:
+  ```
+  [!] No existing 'iis-swg' profile found. Created a new one at:
+      ~/.config/iis-swg
 
-GitHub code search requires an authenticated session. The script uses its **own dedicated Chromium profile** (`~/.config/gsnw-chromium`) so your login persists between runs without touching your regular browser profile.
+  [*] One-time setup needed before this tool can search GitHub:
+    1) Open a new terminal window.
+    2) Paste and run this command:
 
-If you're running this on Linux/WSL and Chromium isn't already configured or logged in to GitHub the way it is on the original author's Windows profile, you need to log in once, manually, using the **exact same profile path** the script uses:
+      "chromium" --user-data-dir="~/.config/iis-swg" --profile-directory=Default
 
-```bash
-chromium --user-data-dir=~/.config/gsnw-chromium --profile-directory=Default
-```
+    3) A Chromium/Chrome window will open. Log in to GitHub (or create a free account).
+    4) Close that window.
+    5) Come back here and re-run this tool - it will reuse that login automatically.
+  ```
+  Just follow those steps once; the tool exits after printing them so it
+  doesn't waste a search attempt while you're not logged in yet.
 
-1. Run the command above — this opens a normal (non-headless) Chromium window using the same profile the script will later use headlessly.
-2. Go to `github.com` and sign in to any GitHub account (or create a new one).
-3. Close Chromium once you're logged in.
-4. Run the script normally — it will now reuse that session in headless mode.
-
-If you skip this step, the script will detect that GitHub is asking you to sign in and will exit early with a message telling you to log in via that same profile.
+Running with `-dedicated-profile` skips the picker entirely and always
+uses the dedicated profile — useful for scripted/automated runs.
 
 ## Usage
 
 ```bash
-python3 gsnw.py <search_query> [output_file] [-silent]
+python3 gsnw.py <search_query> [output_file] [-silent] [-dedicated-profile]
 ```
 
-- `<search_query>` — the partial name to search for in GitHub code paths (e.g. a truncated 8.3 shortname).
-- `[output_file]` — optional, path to save results as a plain-text wordlist.
-- `-silent` — optional, suppresses the startup banner.
+- `<search_query>` — the partial/short name fragment to search for in GitHub code paths
+- `[output_file]` — optional, saves results to this file
+- `-silent` — optional, suppresses the banner
+- `-dedicated-profile` — optional, skips the profile picker and always uses the tool's own dedicated Chromium profile (no interactive prompt)
 
-### Example
+## Example
 
 ```bash
 python3 gsnw.py sapmai output.txt -silent
 ```
 
-Searches GitHub code for `sapmai` and saves matching path segments to `output.txt` without showing the banner.
+Searches GitHub code for `sapmai` and saves matching path segments to `output.txt` without printing the banner.
 
 ## Notes
 
-- Runs headless by default. To watch the browser while it works (useful for debugging), comment out the `--headless=new` argument in `create_driver()`.
-- Close any other Chromium instances using the same profile before running — a locked profile directory will cause the driver to fail to start.
-- Tested on WSL Kali. Should work on any Linux distro with Chromium installed, given the hardcoded `/usr/bin/chromium` binary path.
-- Not tested on native Windows or macOS in this rewrite — see the original repo if you need a Windows-first version.
+- Runs headless by default. To watch the browser live, remove/comment the `--headless=new` argument in `create_driver()`.
+- Close any running Chromium instances before starting the tool — a second process can't attach to a profile that's already open.
+- Be mindful of GitHub's rate limits; the script already waits between paginated requests.
 
 ## Disclaimer
 
-This script is provided "as is" without any warranties. Use it at your own risk, and only against targets and code you have permission to search or test against.
+Provided "as is" for authorized security testing and research only. Use it
+only against systems and code you have permission to test. The author is not
+responsible for misuse.
 
 ## Author
 
-**@Bugatsec**
-GitHub: [https://github.com/Bugatsec](https://github.com/Bugatsec)
+**@Bugatsec** — [github.com/Bugatsec](https://github.com/Bugatsec)
