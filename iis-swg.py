@@ -4,7 +4,7 @@ IIS-SWG - IIS Shortname Wordlist Generator
 Search GitHub code paths and extract matching path segments.
 
 Author : @Bugatsec
-GitHub : https://github.com/Bugatsec/IIS-SWG
+GitHub : https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator
 """
 
 import argparse
@@ -13,6 +13,7 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
 import time
 from urllib.parse import quote_plus
 
@@ -273,6 +274,188 @@ def is_profile_locked(user_data_dir):
     return os.path.islink(lock_path) or os.path.exists(lock_path)
 
 
+LOCK_FILE_NAMES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+def profile_lock_files(user_data_dir):
+    """
+    Return any Chrome singleton lock files present in this
+    profile directory - a sign a Chrome process still has,
+    or still thinks it has, this profile open.
+    """
+
+    found = []
+
+    for name in LOCK_FILE_NAMES:
+
+        path = os.path.join(user_data_dir, name)
+
+        if os.path.exists(path) or os.path.islink(path):
+            found.append(path)
+
+    return found
+
+
+def kill_processes_for_profile(user_data_dir):
+    """
+    Best-effort, dependency-free: terminate any Chrome/
+    Chromium processes whose command line references this
+    profile directory - e.g. a chrome.exe left running
+    after a Ctrl+C.
+    """
+
+    system = platform.system()
+    killed_any = False
+
+    try:
+
+        if system == "Windows":
+
+            ps_filter = user_data_dir.replace("'", "''")
+
+            ps_cmd = (
+                "Get-CimInstance Win32_Process -Filter "
+                "\"Name='chrome.exe'\" | "
+                f"Where-Object {{ $_.CommandLine -like "
+                f"'*{ps_filter}*' }} | "
+                "Select-Object -ExpandProperty ProcessId"
+            )
+
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+
+            for pid in result.stdout.splitlines():
+
+                pid = pid.strip()
+
+                if not pid.isdigit():
+                    continue
+
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", pid],
+                    capture_output=True
+                )
+
+                killed_any = True
+
+        else:
+
+            result = subprocess.run(
+                ["pgrep", "-f", user_data_dir],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+
+            for pid in result.stdout.splitlines():
+
+                pid = pid.strip()
+
+                if not pid.isdigit():
+                    continue
+
+                try:
+                    os.kill(int(pid), 9)
+                    killed_any = True
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+    return killed_any
+
+
+def clear_stale_lock(user_data_dir, interactive=True):
+    """
+    If the dedicated profile looks like it's still 'open'
+    (e.g. Ctrl+C during a previous scan left chrome.exe
+    running), offer to - or in non-interactive mode, just
+    go ahead and - close it so this run doesn't fail with
+    a 'profile already in use' error.
+    """
+
+    if not profile_lock_files(user_data_dir):
+        return
+
+    print()
+    print(
+        f"{Color.YELLOW}[!] The 'iis-swg' profile looks like it's "
+        f"still open - probably left over from a previous run that "
+        f"was interrupted (e.g. Ctrl+C).{Color.RESET}"
+    )
+
+    do_close = True
+
+    if interactive:
+
+        try:
+
+            choice = input(
+                "Close it now so this run can start cleanly? [Y/n]: "
+            ).strip().lower()
+
+        except (EOFError, KeyboardInterrupt):
+
+            choice = "y"
+
+        do_close = choice in ("", "y", "yes")
+
+    if not do_close:
+        return
+
+    kill_processes_for_profile(user_data_dir)
+
+    # Give the OS a moment to release file handles.
+    for _ in range(5):
+
+        if not profile_lock_files(user_data_dir):
+            break
+
+        time.sleep(1)
+
+    for path in profile_lock_files(user_data_dir):
+
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+    if profile_lock_files(user_data_dir):
+
+        print(
+            f"{Color.RED}[!] Couldn't fully clear the lock. You may "
+            f"need to close it manually or reboot.{Color.RESET}"
+        )
+
+    else:
+
+        print(
+            f"{Color.GREEN}[*] Profile freed up.{Color.RESET}"
+        )
+
+
+def cleanup_profile(user_data_dir):
+    """
+    Called after a scan ends (normally, on error, or on
+    Ctrl+C) to make sure nothing is left holding the
+    dedicated profile open for next time.
+    """
+
+    kill_processes_for_profile(user_data_dir)
+
+    for path in profile_lock_files(user_data_dir):
+
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
 def select_chrome_profile(interactive=True):
     """
     Detect the user's own Chrome/Chromium profiles and let
@@ -390,6 +573,72 @@ def select_chrome_profile(interactive=True):
     return chosen_root, chosen_dir, False
 
 
+def launch_chrome(chrome_options, is_dedicated=False):
+    """
+    Start a Chrome/Chromium session. If the profile is
+    already locked by another running Chrome process (a
+    very common Windows gotcha - Chrome keeps chrome.exe
+    alive in the background even after you close every
+    window, unless 'Continue running background apps' is
+    turned off), this turns Selenium's raw crash traceback
+    into a clear, actionable message instead.
+    """
+
+    try:
+
+        driver = webdriver.Chrome(options=chrome_options)
+
+    except WebDriverException as e:
+
+        message = str(e)
+
+        profile_in_use = (
+            "DevToolsActivePort" in message
+            or "user data directory is already in use" in message
+            or "cannot connect to chrome" in message.lower()
+        )
+
+        if not profile_in_use:
+            raise
+
+        print()
+        print(
+            f"{Color.RED}[!] Chrome couldn't start with this profile - "
+            f"it's almost certainly already open elsewhere.{Color.RESET}"
+        )
+
+        if is_dedicated:
+
+            print(
+                f"{Color.YELLOW}[!] Close any window using the "
+                f"'iis-swg' profile and try again.{Color.RESET}"
+            )
+
+        else:
+
+            print(
+                f"{Color.YELLOW}[!] Close every Chrome window using "
+                f"that profile and try again, or re-run and pick the "
+                f"dedicated 'iis-swg' profile instead so it never "
+                f"touches your main browser.{Color.RESET}"
+            )
+
+        print(
+            f"{Color.YELLOW}[!] On Windows, Chrome often keeps running "
+            f"in the background even after you close every window "
+            f"(Settings > 'Continue running background apps when "
+            f"Google Chrome is closed'). Check Task Manager for a "
+            f"lingering chrome.exe and end it if the window close "
+            f"doesn't fix it.{Color.RESET}"
+        )
+
+        raise SystemExit(1)
+
+    driver.set_page_load_timeout(30)
+
+    return driver
+
+
 def build_chrome_options(
     user_data_dir,
     profile_directory,
@@ -466,10 +715,7 @@ def interactive_github_login(
         headless=False
     )
 
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(30)
-
-    logged_in = False
+    driver = launch_chrome(chrome_options, is_dedicated=True)
 
     try:
 
@@ -548,6 +794,9 @@ def create_driver(interactive=True):
 
     first_run = is_dedicated and not os.path.isdir(user_data_dir)
 
+    if is_dedicated and not first_run:
+        clear_stale_lock(user_data_dir, interactive=interactive)
+
     if first_run:
 
         # --------------------------------------------------
@@ -597,11 +846,7 @@ def create_driver(interactive=True):
         headless=True
     )
 
-    driver = webdriver.Chrome(
-        options=chrome_options
-    )
-
-    driver.set_page_load_timeout(30)
+    driver = launch_chrome(chrome_options, is_dedicated=is_dedicated)
 
     return driver, user_data_dir, profile_directory, is_dedicated, browser_binary
 
@@ -810,8 +1055,7 @@ def search_github(query, interactive=True):
                             headless=True
                         )
 
-                        driver = webdriver.Chrome(options=chrome_options)
-                        driver.set_page_load_timeout(30)
+                        driver = launch_chrome(chrome_options, is_dedicated=True)
 
                         # Retry the same page now that we're logged in.
                         continue
@@ -964,9 +1208,26 @@ def search_github(query, interactive=True):
 
                 break
 
+    except KeyboardInterrupt:
+
+        print()
+        print(
+            f"{Color.YELLOW}[!] Stopped by user (Ctrl+C).{Color.RESET}"
+        )
+
     finally:
 
-        driver.quit()
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+        if is_dedicated:
+
+            # Belt and suspenders: make sure nothing is left
+            # holding this profile open for next time, even
+            # if we got here via Ctrl+C or a crash.
+            cleanup_profile(user_data_dir)
 
     return sorted(
         matched_words,
