@@ -1,1 +1,1 @@
-# IIS-Shortname-Wordlist-Generator
+# IIS-SWG - IIS Shortname Wordlist Generator
