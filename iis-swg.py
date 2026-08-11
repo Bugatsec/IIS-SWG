@@ -142,7 +142,7 @@ def find_browser_binary():
 # --------------------------------------------------
 
 DEDICATED_PROFILE_DIR = os.path.expanduser(
-    "~/.config/gsnw-chromium"
+    "~/.config/iis-swg"
 )
 
 
@@ -294,7 +294,7 @@ def select_chrome_profile(interactive=True):
             ))
 
     dedicated_label = (
-        "Use a separate dedicated profile just for this "
+        "Use a separate dedicated 'iis-swg' profile just for this "
         "tool (recommended, won't touch your main browser)"
     )
 
@@ -377,24 +377,92 @@ def select_chrome_profile(interactive=True):
 
 def create_driver(interactive=True):
 
-    chrome_options = Options()
-
     # --------------------------------------------------
     # Locate Chrome/Chromium for this OS
     # --------------------------------------------------
 
     browser_binary = find_browser_binary()
 
-    if browser_binary:
-
-        chrome_options.binary_location = browser_binary
-
-    else:
+    if not browser_binary:
 
         print(
             f"{Color.YELLOW}[!] Could not auto-detect a Chrome/Chromium "
             f"install. Letting Selenium try to locate it.{Color.RESET}"
         )
+
+    # --------------------------------------------------
+    # Pick a profile: user's own, or the dedicated one
+    # --------------------------------------------------
+
+    user_data_dir, profile_directory, is_dedicated = select_chrome_profile(
+        interactive=interactive
+    )
+
+    if is_dedicated and not os.path.isdir(user_data_dir):
+
+        # --------------------------------------------------
+        # First-time dedicated profile: set it up and stop
+        # here instead of running a search that will fail.
+        # --------------------------------------------------
+
+        os.makedirs(user_data_dir, exist_ok=True)
+
+        launcher = browser_binary if browser_binary else (
+            "chrome.exe" if platform.system() == "Windows" else "chromium"
+        )
+
+        login_cmd = (
+            f"\"{launcher}\" "
+            f"--user-data-dir=\"{user_data_dir}\" "
+            f"--profile-directory=Default"
+        )
+
+        print()
+        print(
+            f"{Color.YELLOW}[!] No existing 'iis-swg' profile found. "
+            f"Created a new one at:{Color.RESET}"
+        )
+        print(f"    {user_data_dir}")
+        print()
+        print(
+            f"{Color.CYAN}[*] One-time setup needed before this tool can "
+            f"search GitHub:{Color.RESET}"
+        )
+        print(
+            f"  1) Open a new terminal window."
+        )
+        print(
+            f"  2) Paste and run this command:"
+        )
+        print()
+        print(f"    {Color.GREEN}{login_cmd}{Color.RESET}")
+        print()
+        print(
+            f"  3) A Chromium/Chrome window will open. Log in to GitHub "
+            f"(or create a free account)."
+        )
+        print(
+            f"  4) Close that window."
+        )
+        print(
+            f"  5) Come back here and re-run this tool - it will reuse "
+            f"that login automatically."
+        )
+        print()
+
+        raise SystemExit(0)
+
+    if is_dedicated:
+
+        print(
+            f"{Color.CYAN}[*] Using existing dedicated profile: "
+            f"{user_data_dir}{Color.RESET}"
+        )
+
+    chrome_options = Options()
+
+    if browser_binary:
+        chrome_options.binary_location = browser_binary
 
     # Headless
     chrome_options.add_argument("--headless=new")
@@ -406,50 +474,6 @@ def create_driver(interactive=True):
 
     # Reduce output
     chrome_options.add_argument("--log-level=3")
-
-    # --------------------------------------------------
-    # Pick a profile: user's own, or a dedicated one
-    # --------------------------------------------------
-
-    user_data_dir, profile_directory, is_dedicated = select_chrome_profile(
-        interactive=interactive
-    )
-
-    if is_dedicated:
-
-        profile_already_existed = os.path.isdir(user_data_dir)
-
-        if profile_already_existed:
-
-            print(
-                f"{Color.CYAN}[*] Using existing dedicated profile: "
-                f"{user_data_dir}{Color.RESET}"
-            )
-
-        else:
-
-            os.makedirs(user_data_dir, exist_ok=True)
-
-            print(
-                f"{Color.YELLOW}[!] No existing dedicated profile found. "
-                f"Created a new one at:{Color.RESET}"
-            )
-
-            print(f"    {user_data_dir}")
-
-            print(
-                f"{Color.YELLOW}[!] This profile isn't logged in to "
-                f"GitHub yet. Log in once by running:{Color.RESET}"
-            )
-
-            print(
-                f"    chromium --user-data-dir=\"{user_data_dir}\""
-            )
-
-            print(
-                f"{Color.YELLOW}[!] Log in to GitHub in that window, "
-                f"then close it and re-run this tool.{Color.RESET}"
-            )
 
     chrome_options.add_argument(
         f"--user-data-dir={user_data_dir}"
@@ -645,11 +669,16 @@ def search_github(query, interactive=True):
                     )
 
                     print(
-                        "[!] Login using the profile:"
+                        f"{Color.YELLOW}[!] If you picked your own "
+                        f"browser profile, headless automation can fail "
+                        f"to reuse its login session even when you're "
+                        f"signed in normally.{Color.RESET}"
                     )
 
                     print(
-                        "    ~/.config/gsnw-chromium"
+                        f"{Color.YELLOW}[!] Re-run and choose the "
+                        f"dedicated 'iis-swg' profile instead (or pass "
+                        f"-dedicated-profile) and log in there once.{Color.RESET}"
                     )
 
                     break
