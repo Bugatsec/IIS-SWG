@@ -24,16 +24,34 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 # --------------------------------------------------
+# Colors
+# --------------------------------------------------
+
+class Color:
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+
+# Enable ANSI colors on Windows terminals
+if os.name == "nt":
+    os.system("")
+
+
+# --------------------------------------------------
 # Banner
 # --------------------------------------------------
 
-BANNER = r"""
-==================================================
-   IIS-SWG - IIS Shortname Wordlist Generator
-==================================================
+BANNER = f"""{Color.CYAN}
+=================================================={Color.RESET}
+{Color.BOLD}   IIS-SWG - IIS Shortname Wordlist Generator{Color.RESET}
+{Color.CYAN}=================================================={Color.RESET}
         by @Bugatsec
         https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator
-==================================================
+{Color.CYAN}=================================================={Color.RESET}
 """
 
 
@@ -111,7 +129,7 @@ def extract_matches(driver, query, matched_words):
     )
 
     print(
-        f"[+] Found {len(elements)} candidate links"
+        f"{Color.CYAN}[+] Found {len(elements)} candidate links{Color.RESET}"
     )
 
     # Keep track of complete files we've already processed
@@ -179,7 +197,7 @@ def extract_matches(driver, query, matched_words):
                     continue
 
                 print(
-                    f"    [+] match -> {segment}"
+                    f"    {Color.GREEN}[+] match -> {segment}{Color.RESET}"
                 )
 
                 matched_words.add(segment)
@@ -226,8 +244,8 @@ def search_github(query):
 
             print()
             print(
-                f"[*] Searching page "
-                f"{page_number}: {url}"
+                f"{Color.YELLOW}[*] Searching page "
+                f"{page_number}: {url}{Color.RESET}"
             )
 
             try:
@@ -264,8 +282,8 @@ def search_github(query):
 
                     print()
                     print(
-                        "[!] GitHub requires "
-                        "authentication for code search."
+                        f"{Color.RED}[!] GitHub requires "
+                        f"authentication for code search.{Color.RESET}"
                     )
 
                     print(
@@ -306,9 +324,9 @@ def search_github(query):
                 )
 
                 print(
-                    f"[*] New matches on page "
+                    f"{Color.YELLOW}[*] New matches on page "
                     f"{page_number}: "
-                    f"{new_matches}"
+                    f"{new_matches}{Color.RESET}"
                 )
 
                 # --------------------------------------------------
@@ -377,7 +395,7 @@ def search_github(query):
             except TimeoutException:
 
                 print(
-                    "[!] Page load timed out."
+                    f"{Color.RED}[!] Page load timed out.{Color.RESET}"
                 )
 
                 save_debug_page(
@@ -390,12 +408,12 @@ def search_github(query):
             except Exception as e:
 
                 print(
-                    f"[!] Error type: "
-                    f"{type(e).__name__}"
+                    f"{Color.RED}[!] Error type: "
+                    f"{type(e).__name__}{Color.RESET}"
                 )
 
                 print(
-                    f"[!] Error: {e}"
+                    f"{Color.RED}[!] Error: {e}{Color.RESET}"
                 )
 
                 save_debug_page(
@@ -524,24 +542,21 @@ def main():
     # --------------------------------------------------
 
     print()
-    print("=" * 50)
+    print(f"{Color.CYAN}{'=' * 50}{Color.RESET}")
     print(f" Query   : {args.search_query}")
-    print(f" Matches : {len(matched_words)}")
-    print("=" * 50)
+    print(f" Matches : {Color.GREEN}{len(matched_words)}{Color.RESET}")
+    print(f"{Color.CYAN}{'=' * 50}{Color.RESET}")
 
     if matched_words:
 
-        for i, word in enumerate(matched_words, 1):
-            print(f" {i:>3}. {word}")
+        for word in matched_words:
+            print(f" {Color.GREEN}{word}{Color.RESET}")
 
     else:
 
-        print(" No matching paths found.")
+        print(f" {Color.YELLOW}No matching paths found.{Color.RESET}")
 
-    print("=" * 50)
-    print(" IIS-SWG by @Bugatsec")
-    print(" https://github.com/Bugatsec/IIS-Shortname-Wordlist-Generator")
-    print("=" * 50)
+    print(f"{Color.CYAN}{'=' * 50}{Color.RESET}")
 
     # --------------------------------------------------
     # Save output
