@@ -1,4 +1,4 @@
-# IIS-SWG — IIS Shortname Wordlist Generator
+# IIS-SWG: IIS Shortname Wordlist Generator
 
 ![Python](https://img.shields.io/badge/python-3.x-blue?logo=python&logoColor=white)
 ![Selenium](https://img.shields.io/badge/selenium-4.15%2B-43B02A?logo=selenium&logoColor=white)
@@ -65,58 +65,45 @@ profiles (on Windows, Linux/WSL, and macOS) and shows you a picker:
 Select a profile to use [1-3] (default 3):
 ```
 
-- **Pick your own profile** if you're already logged in to GitHub there.
-  You'll need to close that browser window first — a profile that's
-  currently open and locked can't be reused by the tool, and it'll
+- **Pick your own profile**: if you're already logged in to GitHub there.
+  You'll need to close that browser window, a profile that's currently
+  open and locked can't be reused by the tool, and it'll
   automatically fall back to the dedicated profile if it detects that.
-  Note: even when closed, headless automation sometimes fails to reuse a
+
+  **Note:** even when closed, headless automation sometimes fails to reuse a
   real profile's login session (Chrome/GitHub can treat an automated
-  session differently from a normal one) — if you hit an auth wall here,
+  session differently from a normal one), if you hit an auth wall here,
   switch to the dedicated profile below.
-- **Pick the dedicated option (default)** to leave your main browser
+- **Pick the dedicated option (default/recommended)**: to leave your main browser
   completely untouched. The tool creates and reuses its own separate
   profile named `iis-swg` at:
   ```
   ~/.config/iis-swg
   ```
-  The first time this profile is created, the tool stops and prints a
-  ready-to-paste command instead of trying (and failing) to search. It
-  looks like this:
-  ```
-  [!] No existing 'iis-swg' profile found. Created a new one at:
-      ~/.config/iis-swg
-
-  [*] One-time setup needed before this tool can search GitHub:
-    1) Open a new terminal window.
-    2) Paste and run this command:
-
-      "chromium" --user-data-dir="~/.config/iis-swg" --profile-directory=Default
-
-    3) A Chromium/Chrome window will open. Log in to GitHub (or create a free account).
-    4) Close that window.
-    5) Come back here and re-run this tool - it will reuse that login automatically.
-  ```
-  Just follow those steps once; the tool exits after printing them so it
-  doesn't waste a search attempt while you're not logged in yet.
+  The first time this profile is created, the tool opens a
+  browser window itself and walks you through logging in to GitHub -
+  you don't need to run anything manually in a separate terminal. Once
+  it detects you're logged in, it closes the window automatically and
+  continues straight into the search using that session.
 
 Running with `-dedicated-profile` skips the picker entirely and always
-uses the dedicated profile — useful for scripted/automated runs.
+uses the dedicated profile, useful for scripted/automated runs.
 
 ## Usage
 
 ```bash
-python3 gsnw.py <search_query> [output_file] [-silent] [-dedicated-profile]
+python3 iis-swg.py <search_query> [output_file] [-silent] [-dedicated-profile]
 ```
 
-- `<search_query>` — the partial/short name fragment to search for in GitHub code paths
-- `[output_file]` — optional, saves results to this file
-- `-silent` — optional, suppresses the banner
-- `-dedicated-profile` — optional, skips the profile picker and always uses the tool's own dedicated Chromium profile (no interactive prompt)
+- `<search_query>`: the partial/short name fragment to search for in GitHub code paths
+- `[output_file]`: optional, saves results to this file
+- `-silent`: optional, suppresses the banner
+- `-dedicated-profile`: optional, skips the profile picker and always uses the tool's own dedicated Chromium profile (no interactive prompt)
 
 ## Example
 
 ```bash
-python3 gsnw.py sapmai output.txt -silent
+python3 iis-swg.py sapmai output.txt -silent
 ```
 
 Searches GitHub code for `sapmai` and saves matching path segments to `output.txt` without printing the banner.
@@ -124,7 +111,7 @@ Searches GitHub code for `sapmai` and saves matching path segments to `output.tx
 ## Notes
 
 - Runs headless by default. To watch the browser live, remove/comment the `--headless=new` argument in `create_driver()`.
-- Close any running Chromium instances before starting the tool — a second process can't attach to a profile that's already open.
+- Close any running Chromium instances before starting the tool. a second process can't attach to a profile that's already open. On Windows, Chrome commonly keeps running in the background after you close every window (see Settings → "Continue running background apps when Google Chrome is closed"), check Task Manager for a lingering `chrome.exe` if you hit a "profile already in use" error.
 - Be mindful of GitHub's rate limits; the script already waits between paginated requests.
 
 ## Disclaimer
@@ -135,4 +122,4 @@ responsible for misuse.
 
 ## Author
 
-**@Bugatsec** — [github.com/Bugatsec](https://github.com/Bugatsec)
+**@Bugatsec**: [github.com/Bugatsec](https://github.com/Bugatsec)
