@@ -8,19 +8,18 @@
 ![Issues](https://img.shields.io/github/issues/Bugatsec/IIS-SWG)
 ![Last Commit](https://img.shields.io/github/last-commit/Bugatsec/IIS-SWG)
 
-Automates fetching potential file and directory names based on the partial
-names recovered by an IIS Tilde (`~`) shortname scanner. It drives a headless
-Chrome/Chromium browser via Selenium to run GitHub code searches for a given
-short-name fragment and collects matching path segments into a wordlist.
+IIS-SWG takes IIS 8.3 short filename fragments such as:
 
-## Credits
+    URLREW~1.EXE
+    ASPNET~1
+    NGSUIT~1
 
-This tool is based on the original **[gsnw](https://github.com/retkoussa/gsnw)**
-by [@retkoussa](https://github.com/retkoussa). The original script targeted a
-Windows + Chrome setup. This repository is an independent rewrite (not a fork)
-adapted for a Linux / WSL (Kali) + Chromium workflow, with output formatting
-and setup changes for that environment. All credit for the original concept
-and implementation goes to the original author.
+and searches public GitHub code paths for possible full filename
+candidates.
+
+It is designed to complement IIS short-name enumeration tools such
+as ShortScan when a discovered short name cannot be resolved to its
+original filename.
 
 ## Features
 
@@ -123,3 +122,12 @@ responsible for misuse.
 ## Author
 
 **@Bugatsec**: [github.com/Bugatsec](https://github.com/Bugatsec)
+
+## Credits
+
+This tool concept is based on **[gsnw](https://github.com/retkoussa/gsnw)**
+by [@retkoussa](https://github.com/retkoussa). The original script targeted a
+Windows + Chrome setup. This repository is an independent rewrite (not a fork)
+adapted for a Linux / WSL (Kali) + Chromium workflow, with output formatting
+and setup changes for that environment. All credit for the original concept
+and implementation goes to the original author.
