@@ -281,7 +281,9 @@ def profile_lock_files(user_data_dir):
     """
     Return any Chrome singleton lock files present in this
     profile directory - a sign a Chrome process still has,
-    or still thinks it has, this profile open.
+    or still thinks it has, this profile open. This only
+    ever fires on Linux/macOS - Chrome on Windows doesn't
+    use lock files at all (see find_pids_for_profile).
     """
 
     found = []
@@ -296,51 +298,76 @@ def profile_lock_files(user_data_dir):
     return found
 
 
-def kill_processes_for_profile(user_data_dir):
+def find_pids_for_profile(user_data_dir):
     """
-    Best-effort, dependency-free: terminate any Chrome/
-    Chromium processes whose command line references this
-    profile directory - e.g. a chrome.exe left running
-    after a Ctrl+C.
+    Return PIDs of any Chrome/Chromium processes whose
+    command line references this profile directory.
+    Dependency-free (no psutil required). This is the
+    only reliable way to detect a stuck profile on
+    Windows, since Chrome doesn't use lock files there -
+    it uses a named mutex instead, which leaves no file
+    to check for.
+
+    On Windows we pull back ALL chrome.exe processes with
+    their full command lines as JSON, then do the substring
+    match ourselves in Python. Doing the match inside the
+    PowerShell -like expression (as a hand-built '*path*'
+    string) is fragile - backslashes, spaces, and quoting
+    inside an embedded single-quoted pattern are easy to get
+    wrong, and it can silently match nothing even though the
+    process is clearly there. Matching in Python sidesteps
+    all of that.
     """
 
     system = platform.system()
-    killed_any = False
+    pids = []
 
     try:
 
         if system == "Windows":
 
-            ps_filter = user_data_dir.replace("'", "''")
-
             ps_cmd = (
                 "Get-CimInstance Win32_Process -Filter "
                 "\"Name='chrome.exe'\" | "
-                f"Where-Object {{ $_.CommandLine -like "
-                f"'*{ps_filter}*' }} | "
-                "Select-Object -ExpandProperty ProcessId"
+                "Select-Object ProcessId, CommandLine | "
+                "ConvertTo-Json -Compress"
             )
 
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 capture_output=True,
                 text=True,
-                timeout=15
+                timeout=20
             )
 
-            for pid in result.stdout.splitlines():
+            output = result.stdout.strip()
 
-                pid = pid.strip()
+            if output:
 
-                if not pid.isdigit():
-                    continue
+                try:
+                    data = json.loads(output)
+                except json.JSONDecodeError:
+                    data = None
 
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", pid],
-                    capture_output=True
-                )
+                if data is not None:
 
-                killed_any = True
+                    # ConvertTo-Json returns a single object
+                    # (not a list) when there's only one match.
+                    if isinstance(data, dict):
+                        data = [data]
+
+                    target = os.path.normpath(user_data_dir).lower()
+
+                    for proc in data:
+
+                        cmdline = proc.get("CommandLine") or ""
+
+                        if target in cmdline.lower():
+
+                            proc_id = proc.get("ProcessId")
+
+                            if proc_id is not None:
+                                pids.append(str(proc_id))
 
         else:
 
@@ -355,17 +382,60 @@ def kill_processes_for_profile(user_data_dir):
 
                 pid = pid.strip()
 
-                if not pid.isdigit():
-                    continue
-
-                try:
-                    os.kill(int(pid), 9)
-                    killed_any = True
-                except Exception:
-                    pass
+                if pid.isdigit():
+                    pids.append(pid)
 
     except Exception:
         pass
+
+    return pids
+
+
+def profile_looks_locked(user_data_dir):
+    """
+    True if either a POSIX-style singleton lock file is
+    present, or a lingering Chrome process for this profile
+    is still running (the Windows-relevant check).
+    """
+
+    return bool(
+        profile_lock_files(user_data_dir)
+        or find_pids_for_profile(user_data_dir)
+    )
+
+
+def kill_processes_for_profile(user_data_dir):
+    """
+    Best-effort, dependency-free: terminate any Chrome/
+    Chromium processes whose command line references this
+    profile directory - e.g. a chrome.exe left running
+    after a Ctrl+C. Uses /T on Windows to also take out
+    the child renderer/GPU processes under it.
+    """
+
+    system = platform.system()
+    killed_any = False
+
+    for pid in find_pids_for_profile(user_data_dir):
+
+        try:
+
+            if system == "Windows":
+
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", pid],
+                    capture_output=True,
+                    timeout=15
+                )
+
+            else:
+
+                os.kill(int(pid), 9)
+
+            killed_any = True
+
+        except Exception:
+            pass
 
     return killed_any
 
@@ -379,7 +449,7 @@ def clear_stale_lock(user_data_dir, interactive=True):
     a 'profile already in use' error.
     """
 
-    if not profile_lock_files(user_data_dir):
+    if not profile_looks_locked(user_data_dir):
         return
 
     print()
@@ -410,10 +480,12 @@ def clear_stale_lock(user_data_dir, interactive=True):
 
     kill_processes_for_profile(user_data_dir)
 
-    # Give the OS a moment to release file handles.
-    for _ in range(5):
+    # Give the OS a moment to actually tear the process down
+    # and release the profile (file handles on POSIX, the
+    # named mutex on Windows).
+    for _ in range(10):
 
-        if not profile_lock_files(user_data_dir):
+        if not profile_looks_locked(user_data_dir):
             break
 
         time.sleep(1)
@@ -425,7 +497,7 @@ def clear_stale_lock(user_data_dir, interactive=True):
         except Exception:
             pass
 
-    if profile_lock_files(user_data_dir):
+    if profile_looks_locked(user_data_dir):
 
         print(
             f"{Color.RED}[!] Couldn't fully clear the lock. You may "
@@ -573,15 +645,17 @@ def select_chrome_profile(interactive=True):
     return chosen_root, chosen_dir, False
 
 
-def launch_chrome(chrome_options, is_dedicated=False):
+def launch_chrome(chrome_options, is_dedicated=False, user_data_dir=None):
     """
     Start a Chrome/Chromium session. If the profile is
     already locked by another running Chrome process (a
     very common Windows gotcha - Chrome keeps chrome.exe
     alive in the background even after you close every
     window, unless 'Continue running background apps' is
-    turned off), this turns Selenium's raw crash traceback
-    into a clear, actionable message instead.
+    turned off), this tries a one-time automatic recovery
+    for the dedicated profile (kill + retry) before falling
+    back to a clear, actionable message instead of
+    Selenium's raw crash traceback.
     """
 
     try:
@@ -600,6 +674,50 @@ def launch_chrome(chrome_options, is_dedicated=False):
 
         if not profile_in_use:
             raise
+
+        # --------------------------------------------------
+        # Automatic recovery: only for the profile we own.
+        # --------------------------------------------------
+
+        if is_dedicated and user_data_dir:
+
+            print()
+            print(
+                f"{Color.YELLOW}[!] Profile looked busy - trying to "
+                f"clear it and start again automatically...{Color.RESET}"
+            )
+
+            kill_processes_for_profile(user_data_dir)
+
+            for _ in range(10):
+
+                if not profile_looks_locked(user_data_dir):
+                    break
+
+                time.sleep(1)
+
+            for path in profile_lock_files(user_data_dir):
+
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+            try:
+
+                driver = webdriver.Chrome(options=chrome_options)
+
+                driver.set_page_load_timeout(30)
+
+                print(
+                    f"{Color.GREEN}[*] Recovered - profile is running "
+                    f"again.{Color.RESET}"
+                )
+
+                return driver
+
+            except WebDriverException:
+                pass
 
         print()
         print(
@@ -633,6 +751,7 @@ def launch_chrome(chrome_options, is_dedicated=False):
         )
 
         raise SystemExit(1)
+
 
     driver.set_page_load_timeout(30)
 
@@ -715,7 +834,13 @@ def interactive_github_login(
         headless=False
     )
 
-    driver = launch_chrome(chrome_options, is_dedicated=True)
+    driver = launch_chrome(
+        chrome_options,
+        is_dedicated=True,
+        user_data_dir=user_data_dir
+    )
+
+    logged_in = False
 
     try:
 
@@ -846,7 +971,11 @@ def create_driver(interactive=True):
         headless=True
     )
 
-    driver = launch_chrome(chrome_options, is_dedicated=is_dedicated)
+    driver = launch_chrome(
+        chrome_options,
+        is_dedicated=is_dedicated,
+        user_data_dir=user_data_dir
+    )
 
     return driver, user_data_dir, profile_directory, is_dedicated, browser_binary
 
